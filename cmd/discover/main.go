@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -17,12 +18,24 @@ import (
 // A throwaway harness for testing UDP discovery on its own.
 //
 // Run it twice (two terminals, or two laptops) and each instance should
-// print the other's address within a few seconds.
+// discover the other and show the same file in its cluster list.
+//
+//	go run ./cmd/discover -local -port 3000
+//	go run ./cmd/discover -local -port 3001
+//
+// Stop one of them and watch the other drop that peer after ~9 seconds
+// (the reaper's TTL is 3 announce intervals).
 func main() {
 	tcpPort := flag.String("port", "3000", "TCP port to announce (the port we would serve on)")
 	interval := flag.Duration("interval", 3*time.Second, "how often to announce")
 	override := flag.String("announce", "", "force a specific announce address, e.g. 192.168.1.5:3000")
 	local := flag.Bool("local", false, "test on one machine: use the loopback interface")
+
+	// The file we pretend to share, so the cluster list has something to show.
+	infoHash := flag.String("hash", "9f2c8a1f", "info hash to advertise")
+	fileName := flag.String("name", "movie.mp4", "file name to advertise")
+	fileSize := flag.Int64("size", 734003200, "file size in bytes to advertise")
+
 	flag.Parse()
 
 	announceAddr := *override
@@ -39,9 +52,17 @@ func main() {
 	}
 
 	fmt.Printf("this node announces as %s\n", announceAddr)
+	fmt.Printf("advertising file %q  hash=%s  size=%s\n", *fileName, *infoHash, humanSize(*fileSize))
 	fmt.Println("listening for peers... (ctrl-c to stop)")
 
 	d := p2p.NewUDPDiscovery(announceAddr, *interval)
+
+	// This is the only call the application needs to say "here is what I have".
+	d.SetFiles([]p2p.FileStub{{
+		InfoHash: *infoHash,
+		FileName: *fileName,
+		FileSize: *fileSize,
+	}})
 
 	if *local {
 		iface, err := net.InterfaceByName("lo")
@@ -55,24 +76,86 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// Clean exit on ctrl-c so we don't leave the terminal hanging.
+	// Clean exit on ctrl-c so we don't leave sockets behind.
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-sig
+		d.Stop()
 		fmt.Println("\nbye")
 		os.Exit(0)
 	}()
 
-	// Deduplicate: every peer re-announces every few seconds, forever.
-	seen := make(map[string]bool)
-	for addr := range d.Discover() {
-		if seen[addr] {
+	// Log each peer address once (it is re-announced every few seconds).
+	go func() {
+		seen := make(map[string]bool)
+		for addr := range d.Discover() {
+			if seen[addr] {
+				continue
+			}
+			seen[addr] = true
+			fmt.Printf("heard peer: %s\n", addr)
+		}
+	}()
+
+	// Every 2 seconds, look at the cluster list and print ONLY when it changed.
+	// (Discovery announces forever in the background; that is the heartbeat.
+	//  Printing the same table 30 times a minute just hides the real events.)
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	last := "\x00" // sentinel so the first tick always prints
+	for range ticker.C {
+		clusters := d.Clusters()
+		key := snapshotKey(clusters)
+		if key == last {
 			continue
 		}
-		seen[addr] = true
-		fmt.Printf("found peer: %s\n", addr)
+		last = key
+		printClusters(clusters, *infoHash)
 	}
+}
+
+// snapshotKey turns the cluster list into one comparable string, so we can
+// detect "nothing changed" without comparing slices by hand.
+func snapshotKey(clusters []p2p.ClusterView) string {
+	var b strings.Builder
+	for _, c := range clusters {
+		fmt.Fprintf(&b, "%s|%s|%d|%v;", c.InfoHash, c.FileName, c.FileSize, c.Peers)
+	}
+	return b.String()
+}
+
+func printClusters(clusters []p2p.ClusterView, wanted string) {
+	if len(clusters) == 0 {
+		fmt.Println("(no files discovered yet)")
+		return
+	}
+
+	for _, c := range clusters {
+		mark := " "
+		if c.InfoHash == wanted {
+			mark = "*"
+		}
+		fmt.Printf("%s %s  %-16s %10s  peers=%d\n",
+			mark, c.InfoHash, c.FileName, humanSize(c.FileSize), len(c.Peers))
+		for _, p := range c.Peers {
+			fmt.Printf("      - %s\n", p)
+		}
+	}
+}
+
+func humanSize(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for m := n / unit; m >= unit; m /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(n)/float64(div), "KMGTPE"[exp])
 }
 
 // localIP returns the IPv4 address the OS would use to reach the outside
