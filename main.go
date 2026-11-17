@@ -18,9 +18,10 @@ func main() {
 	interval := flag.Duration("interval", 3*time.Second, "how often to announce")
 	override := flag.String("announce", "", "force a specific announce address, e.g. 192.168.1.5:3000")
 	local := flag.Bool("local", false, "test on one machine: use the loopback interface")
-	infoHash := flag.String("hash", "9f2c8a1f", "info hash to advertise")
-	fileName := flag.String("name", "movie.mp4", "file name to advertise")
-	fileSize := flag.Int64("size", 734003200, "file size in bytes to advertise")
+
+	// The ONLY place a file path appears. Everything the network sees (name,
+	// size, info hash) is computed from this file's bytes.
+	serve := flag.String("serve", "", "file to share (omit to only watch the network)")
 
 	flag.Parse()
 
@@ -38,17 +39,35 @@ func main() {
 	}
 
 	fmt.Printf("this node announces as %s\n", announceAddr)
-	fmt.Printf("advertising file %q  hash=%s  size=%s\n", *fileName, *infoHash, humanSize(*fileSize))
+
+	// Build the announcement from a REAL file. No -serve means we share
+	// nothing and only listen, which is exactly how a leecher behaves.
+	var stubs []FileStub
+	wanted := ""
+
+	if *serve != "" {
+		bp, err := CreateBlueprint(*serve)
+		if err != nil {
+			log.Fatalf("cannot read %s: %v", *serve, err)
+		}
+		wanted = bp.InfoHash
+
+		fmt.Printf("sharing %q  %s  %d chunks of %s\n",
+			bp.FileName, humanSize(bp.FileSize), bp.TotalChunks(), humanSize(int64(bp.ChunkSize)))
+		fmt.Printf("info hash %s\n", bp.InfoHash)
+
+		stubs = append(stubs, bp.Stub())
+	} else {
+		fmt.Println("no -serve given: announcing nothing, only listening")
+	}
+
 	fmt.Println("listening for peers... (ctrl-c to stop)")
 
 	d := NewUDPDiscovery(announceAddr, *interval)
 
 	// This is the only call the application needs to say "here is what I have".
-	d.SetFiles([]FileStub{{
-		InfoHash: *infoHash,
-		FileName: *fileName,
-		FileSize: *fileSize,
-	}})
+	// An empty list is valid and means "I have nothing to offer right now".
+	d.SetFiles(stubs)
 
 	if *local {
 		iface, err := net.InterfaceByName("lo")
@@ -98,7 +117,7 @@ func main() {
 			continue
 		}
 		last = key
-		printClusters(clusters, *infoHash)
+		printClusters(clusters, wanted)
 	}
 }
 
@@ -124,11 +143,20 @@ func printClusters(clusters []ClusterView, wanted string) {
 			mark = "*"
 		}
 		fmt.Printf("%s %s  %-16s %10s  peers=%d\n",
-			mark, c.InfoHash, c.FileName, humanSize(c.FileSize), len(c.Peers))
+			mark, shortHash(c.InfoHash), c.FileName, humanSize(c.FileSize), len(c.Peers))
 		for _, p := range c.Peers {
 			fmt.Printf("      - %s\n", p)
 		}
 	}
+}
+
+// shortHash is for DISPLAY only. The network always matches full 64-char
+// hashes; an 8-character prefix would collide on a real network.
+func shortHash(h string) string {
+	if len(h) > 12 {
+		return h[:12] + "…"
+	}
+	return h
 }
 
 func humanSize(n int64) string {
