@@ -1,12 +1,6 @@
 package p2p
 
 // This file is the "who has what" memory of the discovery layer.
-//
-// It is a plain map guarded by a mutex. No sockets, no files, no timeouts:
-//   clusters[infoHash] = { FileName, FileSize, peers: { addr -> lastSeen } }
-//
-// The UDP listener fills it, the reaper empties the old entries, and the
-// application reads it through GetClusters().
 
 import (
 	"sort"
@@ -14,53 +8,39 @@ import (
 	"time"
 )
 
-// FileStub is the small summary of a shared file that fits in one UDP packet.
-// It is intentionally NOT the full blueprint: no chunk hashes travel here.
 type FileStub struct {
 	InfoHash string `json:"info_hash"`
 	FileName string `json:"file_name"`
 	FileSize int64  `json:"file_size"`
 }
 
-// Cluster is one file plus every peer that claims to have it.
-// "jin ke paas same file hai" == one Cluster.
 type Cluster struct {
 	InfoHash string
 	FileName string
 	FileSize int64
-
-	// addr ("192.168.1.7:3000") -> the last time we heard from it
 	Peers map[string]time.Time
 }
 
-// ClusterView is a read-only copy given to callers. We never hand out the
-// internal maps, otherwise the caller could read them while we write.
 type ClusterView struct {
 	InfoHash string
 	FileName string
 	FileSize int64
-	Peers    []string
+	Peers []string
 }
 
-// Registry keeps the in-memory map of clusters.
 type Registry struct {
-	mu       sync.RWMutex
+	mu sync.RWMutex
 	clusters map[string]*Cluster
-
-	// now is time.Now by default. Tests replace it with a fake clock so they
-	// do not have to sleep for real seconds.
 	now func() time.Time
 }
 
 func NewRegistry() *Registry {
 	return &Registry{
 		clusters: make(map[string]*Cluster),
-		now:      time.Now,
+		now: time.Now,
 	}
 }
 
-// RegisterBlueprint adds or refreshes every file that `addr` announced.
-// Called from the UDP listen goroutine on every announcement packet.
 func (r *Registry) RegisterBlueprint(addr string, files []FileStub) {
 	if addr == "" {
 		return
@@ -109,7 +89,6 @@ func (r *Registry) UnregisterBlueprint(addr, infoHash string) {
 	}
 }
 
-// UnregisterPeer removes a peer from every file it advertised.
 func (r *Registry) UnregisterPeer(addr string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -122,11 +101,7 @@ func (r *Registry) UnregisterPeer(addr string) {
 	}
 }
 
-// Sweep is the reaper's knife: drop every peer we have not heard from within
-// ttl, then drop clusters that no longer have any peer.
-//
-// Deleting from a map while ranging over it is safe in Go: entries deleted
-// before they are reached are simply not visited.
+
 func (r *Registry) Sweep(ttl time.Duration) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -145,8 +120,6 @@ func (r *Registry) Sweep(ttl time.Duration) {
 	}
 }
 
-// GetClusters returns a copy of everything we know. Safe to call from any
-// goroutine. Sorted so the output is stable and easy to print.
 func (r *Registry) GetClusters() []ClusterView {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -171,7 +144,6 @@ func (r *Registry) GetClusters() []ClusterView {
 	return out
 }
 
-// ClusterPeers answers: "which peers have this exact file?"
 func (r *Registry) ClusterPeers(infoHash string) []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
