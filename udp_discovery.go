@@ -1,4 +1,4 @@
-package p2p
+package main
 
 import (
 	"crypto/rand"
@@ -17,25 +17,25 @@ const MulticastGroup = "239.255.255.250:9999"
 // Announcement is one UDP packet: "I am at Addr, and I have these files".
 // Only the small FileStub summaries travel here, never the chunk hashes.
 type Announcement struct {
-	ID string `json:"id"`
-	Addr string `json:"addr"`
+	ID    string     `json:"id"`
+	Addr  string     `json:"addr"`
 	Files []FileStub `json:"files"`
 }
 
 type UDPDiscovery struct {
-	Group string        
-	AnnounceAddr string        
-	Interval time.Duration 
-	Iface *net.Interface
-	peers chan string
-	id string
-	filesMu sync.RWMutex
-	files []FileStub
-	registry *Registry
-	mu sync.Mutex
-	conn *net.UDPConn
-	done chan struct{}
-	stopOnce sync.Once
+	Group        string
+	AnnounceAddr string
+	Interval     time.Duration
+	Iface        *net.Interface
+	peers        chan string
+	id           string
+	filesMu      sync.RWMutex
+	files        []FileStub
+	registry     *Registry
+	mu           sync.Mutex
+	conn         *net.UDPConn
+	done         chan struct{}
+	stopOnce     sync.Once
 }
 
 func NewUDPDiscovery(announceAddr string, interval time.Duration) *UDPDiscovery {
@@ -54,7 +54,6 @@ func NewUDPDiscovery(announceAddr string, interval time.Duration) *UDPDiscovery 
 	}
 }
 
-
 func (d *UDPDiscovery) SetFiles(files []FileStub) {
 	d.filesMu.Lock()
 	defer d.filesMu.Unlock()
@@ -62,7 +61,6 @@ func (d *UDPDiscovery) SetFiles(files []FileStub) {
 	d.files = make([]FileStub, len(files))
 	copy(d.files, files)
 }
-
 
 func (d *UDPDiscovery) Discover() <-chan string {
 	return d.peers
@@ -138,7 +136,7 @@ func (d *UDPDiscovery) listen(conn *net.UDPConn) {
 
 		var a Announcement
 		if err := json.Unmarshal(buf[:n], &a); err != nil {
-			continue 
+			continue
 		}
 
 		if a.ID == d.id || a.Addr == "" {

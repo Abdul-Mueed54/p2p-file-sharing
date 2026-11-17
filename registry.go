@@ -1,4 +1,4 @@
-package p2p
+package main
 
 // This file is the "who has what" memory of the discovery layer.
 
@@ -18,26 +18,26 @@ type Cluster struct {
 	InfoHash string
 	FileName string
 	FileSize int64
-	Peers map[string]time.Time
+	Peers    map[string]time.Time
 }
 
 type ClusterView struct {
 	InfoHash string
 	FileName string
 	FileSize int64
-	Peers []string
+	Peers    []string
 }
 
 type Registry struct {
-	mu sync.RWMutex
+	mu       sync.RWMutex
 	clusters map[string]*Cluster
-	now func() time.Time
+	now      func() time.Time
 }
 
 func NewRegistry() *Registry {
 	return &Registry{
 		clusters: make(map[string]*Cluster),
-		now: time.Now,
+		now:      time.Now,
 	}
 }
 
@@ -100,7 +100,6 @@ func (r *Registry) UnregisterPeer(addr string) {
 		}
 	}
 }
-
 
 func (r *Registry) Sweep(ttl time.Duration) {
 	r.mu.Lock()
